@@ -69,14 +69,16 @@ Esta sección fundamental establece las bases de todo el proyecto. Se selecciona
 \textbf{Justificación de la Selección:} Este conjunto de datos se alinea perfectamente con los requisitos de la solicitud del proyecto:
 \begin{itemize}
     \item \textbf{Tabla Plana (CSV Único):} Se proporciona como un único archivo \texttt{marketing\_campaign.csv}, lo que lo hace ideal para un escenario de ETL desde un origen de archivo plano.
-    \item \textbf{Muchos Parámetros (Ancho):} Contiene 28 columnas, proporcionando una gran riqueza de atributos para extraer múltiples dimensiones (demografía del cliente, comportamiento de gasto, respuesta a campañas).
+    \item \textbf{Muchos Parámetros (Ancho):} Contiene 29 columnas, proporcionando una gran riqueza de atributos para extraer múltiples dimensiones (demografía del cliente, comportamiento de gasto, respuesta a campañas, composición del hogar).
     \item \textbf{Valores Nulos:} La columna \texttt{Income} contiene valores nulos, cumpliendo con el requisito explícito de abordar un escenario de limpieza de datos del mundo real.
 \end{itemize}
 
 \subsection{Perfilado del Dataset de Origen (Diccionario de Datos)}
-Antes de diseñar el almacén, es imperativo perfilar el archivo de origen. Un análisis de las 28 columnas revela que cada fila no representa una transacción individual. Columnas como \texttt{MntWines} (gasto en vinos en los últimos 2 años) y \texttt{Complain} (queja en los últimos 2 años) indican que cada fila es un snapshot periódico (posiblemente de 2 años) de un solo cliente.
+Antes de diseñar el almacén, es imperativo perfilar el archivo de origen. Un análisis de las 29 columnas revela que cada fila no representa una transacción individual. Columnas como \texttt{MntWines} (gasto en vinos en los últimos 2 años) y \texttt{Complain} (queja en los últimos 2 años) indican que cada fila es un snapshot periódico (posiblemente de 2 años) de un solo cliente.
 
 Este es un punto crucial: no estamos cargando datos 1:1. El proceso ETL deberá desagregar y despivotar esta vista de cliente altamente denormalizada en un modelo transaccional normalizado (esquema en estrella). La siguiente tabla sirve como la 'piedra Rosetta' del proyecto, traduciendo las columnas de origen en bruto a su rol en el futuro Data Warehouse.
+
+\textbf{Nota sobre campos no utilizados:} Del conjunto completo de 29 columnas del dataset original, algunos campos (\texttt{Kidhome}, \texttt{Teenhome}, \texttt{Recency}, \texttt{NumWebVisitsMonth}) no han sido incorporados al modelo dimensional. Esta decisión responde al enfoque estratégico del proyecto, centrado en el análisis de rentabilidad por producto, efectividad de canales de venta y respuesta a campañas. Dichos campos, aunque valiosos, no aportaban insights directamente alineados con las preguntas de negocio priorizadas. Sin embargo, en futuras iteraciones con un enfoque diferente (p.ej., análisis de comportamiento del hogar o engagement digital), estos campos podrían explotarse para generar valor adicional.
 
 \begin{longtable}{|p{4cm}|p{1.5cm}|p{4cm}|p{5cm}|}
 \caption{Diccionario de Datos y Agrupación Dimensional Propuesta} \label{tab:diccionario} \\
@@ -92,18 +94,25 @@ ID & int64 & Identificador único & Dim\_Cliente (Business Key) \\
 Year\_Birth & int64 & Año de nacimiento & Dim\_Cliente (Atributo) \\
 Education & object & Nivel de educación & Dim\_Cliente (Atributo) \\
 Marital\_Status & object & Estado civil & Dim\_Cliente (Atributo) \\
-Income & object & Ingreso anual (con nulos) & Dim\_Cliente (Atributo) \\
-Dt\_Customer & object & Fecha de alta & Dim\_Fecha (Clave Foránea) \\
+Income & float64 & Ingreso anual (con nulos) & Dim\_Cliente (Atributo) \\
+Kidhome & int64 & Niños pequeños en hogar & Dim\_Cliente (Atributo) \\
+Teenhome & int64 & Adolescentes en hogar & Dim\_Cliente (Atributo) \\
+Dt\_Customer & object & Fecha de alta del cliente & Dim\_Fecha (Clave Foránea) \\
+Recency & int64 & Días desde última compra & Dim\_Cliente (Atributo) \\
 MntWines & int64 & Gasto en vinos & Fact\_Gasto (Medida) \\
 MntFruits & int64 & Gasto en frutas & Fact\_Gasto (Medida) \\
 MntMeatProducts & int64 & Gasto en carnes & Fact\_Gasto (Medida) \\
+MntFishProducts & int64 & Gasto en pescado & Fact\_Gasto (Medida) \\
+MntSweetProducts & int64 & Gasto en dulces & Fact\_Gasto (Medida) \\
+MntGoldProds & int64 & Gasto en oro & Fact\_Gasto (Medida) \\
+NumDealsPurchases & int64 & Compras con descuento & Fact\_Compras (Medida) \\
 NumWebPurchases & int64 & Compras vía web & Fact\_Compras (Medida) \\
-NumStorePurchases & int64 & Compras en tienda & Fact\_Compras (Medida) \\
 NumCatalogPurchases & int64 & Compras por catálogo & Fact\_Compras (Medida) \\
+NumStorePurchases & int64 & Compras en tienda & Fact\_Compras (Medida) \\
+NumWebVisitsMonth & int64 & Visitas web al mes & No utilizado \\
 AcceptedCmp1-5 & int64 & Aceptación campañas 1-5 & Fact\_RespuestasCampana \\
 Response & int64 & Aceptación última campaña & Fact\_RespuestasCampana \\
 Complain & int64 & Queja en últimos 2 años & Dim\_Cliente (Atributo) \\
-Country & object & País del cliente & Dim\_Cliente (Atributo) \\
 \hline
 \end{longtable}
 
@@ -151,7 +160,7 @@ El modelo de origen (tabla plana única) es ineficiente para BI. Las consultas a
     \item \textbf{Dim\_Cliente (El 'Quién'):} Almacena atributos demográficos.
     \begin{itemize}
         \item \textit{PK:} ClienteSK. \textit{BK:} ClienteID\_Origen.
-        \item \textit{Atributos:} AnioNacimiento, Educacion, EstadoCivil, Ingreso, Pais, FlagQueja.
+        \item \textit{Atributos:} AnioNacimiento, Educacion, EstadoCivil, Ingreso, FlagQueja.
     \end{itemize}
     
     \item \textbf{Dim\_Fecha (El 'Cuándo'):} Tabla de fechas estándar para análisis temporal.
@@ -169,7 +178,7 @@ El modelo de origen (tabla plana única) es ineficiente para BI. Las consultas a
     \item \textbf{Dim\_CanalCompra (El 'Dónde'):} Transforma columnas de compras en filas.
     \begin{itemize}
         \item \textit{PK:} CanalCompraSK.
-        \item \textit{Valores:} 'Web', 'Catalog', 'Store', 'Deals'.
+        \item \textit{Valores:} 'Web', 'Catalog', 'Store', 'Deals' (descuentos).
     \end{itemize}
     
     \item \textbf{Dim\_Campana (El 'Por Qué'):} Almacena detalles de campañas.
@@ -605,11 +614,14 @@ Basado en la auditoría anterior, se identifican áreas clave para la evolución
     \item \textbf{Incorporación de Datos de Costos (Prioridad Alta):}
     La pregunta de negocio sobre el ROI no ha podido ser resuelta en esta fase. Se requiere la ingesta de un nuevo fichero origen que contenga el presupuesto gastado por campaña (\texttt{Dim\_Campana.CostoCampana}). Esto habilitará automáticamente el cálculo de métricas de rentabilidad sin modificar la estructura del Data Warehouse.
     
-    \item \textbf{Análisis Geográfico:}
-    Aprovechar la columna \texttt{Country} disponible en el dataset (actualmente cargada pero no explotada) para añadir un mapa interactivo que permita filtrar el rendimiento de marketing por región geográfica.
+    \item \textbf{Análisis de Composición del Hogar:}
+    Explotar los campos \texttt{Kidhome} y \texttt{Teenhome} para segmentar clientes por estructura familiar y analizar patrones de compra según la presencia de niños o adolescentes en el hogar.
     
-    \item \textbf{Modelo Predictivo:}
-    Integrar un script de Python o R en Power BI para clusterizar a los clientes basándose en su comportamiento de compra (RFM Analysis), yendo más allá del análisis descriptivo actual hacia uno prescriptivo.
+    \item \textbf{Análisis de Comportamiento Web:}
+    Integrar el campo \texttt{NumWebVisitsMonth} (actualmente no utilizado) para correlacionar la actividad en el sitio web con las conversiones y detectar oportunidades de optimización del embudo de ventas digital.
+    
+    \item \textbf{Modelo Predictivo RFM:}
+    Aprovechar el campo \texttt{Recency} junto con las métricas de frecuencia y valor monetario para implementar un análisis RFM (Recency, Frequency, Monetary) mediante scripts de Python o R en Power BI, permitiendo la segmentación predictiva de clientes.
 \end{enumerate}
 
 \end{document}
