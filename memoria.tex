@@ -1,0 +1,615 @@
+\documentclass[12pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[spanish]{babel}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{geometry}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{longtable}
+\usepackage{amsmath}
+% Paquete para manejar espacios en nombres de archivo
+\usepackage[space]{grffile} 
+
+\geometry{left=2.5cm, right=2.5cm, top=2.5cm, bottom=2.5cm}
+
+% Configuración de colores y estilo para código SQL
+\definecolor{codegreen}{rgb}{0,0.6,0}
+\definecolor{codegray}{rgb}{0.5,0.5,0.5}
+\definecolor{codepurple}{rgb}{0.58,0,0.82}
+\definecolor{backcolour}{rgb}{0.95,0.95,0.92}
+
+\lstdefinestyle{mystyle}{
+    backgroundcolor=\color{backcolour},   
+    commentstyle=\color{codegreen},
+    keywordstyle=\color{blue},
+    numberstyle=\tiny\color{codegray},
+    stringstyle=\color{codepurple},
+    basicstyle=\ttfamily\footnotesize,
+    breakatwhitespace=false,         
+    breaklines=true,                 
+    captionpos=b,                    
+    keepspaces=true,                 
+    numbers=left,                    
+    numbersep=5pt,                  
+    showspaces=false,                
+    showstringspaces=false,
+    showtabs=false,                  
+    tabsize=2,
+    inputencoding=utf8,
+    extendedchars=true,
+    literate={á}{{\'a}}1 {é}{{\'e}}1 {í}{{\'i}}1 {ó}{{\'o}}1 {ú}{{\'u}}1 {ñ}{{\~n}}1
+}
+
+\lstset{style=mystyle}
+
+\title{\textbf{Proyecto Integral de Business Intelligence}\\
+\large De los Datos Crudos al Dashboard: SQL Server, SSIS y Power BI}
+\author{Documentación Técnica del Proyecto}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+\tableofcontents
+\listoffigures
+\listoftables
+\newpage
+
+\section{Análisis del Dataset de Origen y Definición de Requisitos de Negocio}
+Esta sección fundamental establece las bases de todo el proyecto. Se selecciona la materia prima (los datos) y se define el propósito (los requisitos de negocio).
+
+\subsection{Selección y Justificación del Dataset}
+\textbf{Dataset Seleccionado:} 'Marketing Campaign Dataset'.
+\textbf{Fuente:} Kaggle (\url{https://www.kaggle.com/datasets/rodsaldanha/arketing-campaign/data}).
+
+\textbf{Justificación de la Selección:} Este conjunto de datos se alinea perfectamente con los requisitos de la solicitud del proyecto:
+\begin{itemize}
+    \item \textbf{Tabla Plana (CSV Único):} Se proporciona como un único archivo \texttt{marketing\_campaign.csv}, lo que lo hace ideal para un escenario de ETL desde un origen de archivo plano.
+    \item \textbf{Muchos Parámetros (Ancho):} Contiene 28 columnas, proporcionando una gran riqueza de atributos para extraer múltiples dimensiones (demografía del cliente, comportamiento de gasto, respuesta a campañas).
+    \item \textbf{Valores Nulos:} La columna \texttt{Income} contiene valores nulos, cumpliendo con el requisito explícito de abordar un escenario de limpieza de datos del mundo real.
+\end{itemize}
+
+\subsection{Perfilado del Dataset de Origen (Diccionario de Datos)}
+Antes de diseñar el almacén, es imperativo perfilar el archivo de origen. Un análisis de las 28 columnas revela que cada fila no representa una transacción individual. Columnas como \texttt{MntWines} (gasto en vinos en los últimos 2 años) y \texttt{Complain} (queja en los últimos 2 años) indican que cada fila es un snapshot periódico (posiblemente de 2 años) de un solo cliente.
+
+Este es un punto crucial: no estamos cargando datos 1:1. El proceso ETL deberá desagregar y despivotar esta vista de cliente altamente denormalizada en un modelo transaccional normalizado (esquema en estrella). La siguiente tabla sirve como la 'piedra Rosetta' del proyecto, traduciendo las columnas de origen en bruto a su rol en el futuro Data Warehouse.
+
+\begin{longtable}{|p{4cm}|p{1.5cm}|p{4cm}|p{5cm}|}
+\caption{Diccionario de Datos y Agrupación Dimensional Propuesta} \label{tab:diccionario} \\
+\hline
+\textbf{Columna (Origen)} & \textbf{Tipo} & \textbf{Descripción} & \textbf{Agrupación Propuesta} \\
+\hline
+\endfirsthead
+\hline
+\textbf{Columna (Origen)} & \textbf{Tipo} & \textbf{Descripción} & \textbf{Agrupación Propuesta} \\
+\hline
+\endhead
+ID & int64 & Identificador único & Dim\_Cliente (Business Key) \\
+Year\_Birth & int64 & Año de nacimiento & Dim\_Cliente (Atributo) \\
+Education & object & Nivel de educación & Dim\_Cliente (Atributo) \\
+Marital\_Status & object & Estado civil & Dim\_Cliente (Atributo) \\
+Income & object & Ingreso anual (con nulos) & Dim\_Cliente (Atributo) \\
+Dt\_Customer & object & Fecha de alta & Dim\_Fecha (Clave Foránea) \\
+MntWines & int64 & Gasto en vinos & Fact\_Gasto (Medida) \\
+MntFruits & int64 & Gasto en frutas & Fact\_Gasto (Medida) \\
+MntMeatProducts & int64 & Gasto en carnes & Fact\_Gasto (Medida) \\
+NumWebPurchases & int64 & Compras vía web & Fact\_Compras (Medida) \\
+NumStorePurchases & int64 & Compras en tienda & Fact\_Compras (Medida) \\
+NumCatalogPurchases & int64 & Compras por catálogo & Fact\_Compras (Medida) \\
+AcceptedCmp1-5 & int64 & Aceptación campañas 1-5 & Fact\_RespuestasCampana \\
+Response & int64 & Aceptación última campaña & Fact\_RespuestasCampana \\
+Complain & int64 & Queja en últimos 2 años & Dim\_Cliente (Atributo) \\
+Country & object & País del cliente & Dim\_Cliente (Atributo) \\
+\hline
+\end{longtable}
+
+\subsection{Definición de Requisitos de Negocio y KPIs}
+Tras el análisis del modelo dimensional y la calidad de los datos, se establecieron las siguientes reglas de negocio para garantizar la integridad del análisis en el Dashboard final:
+
+\begin{itemize}
+    \item \textbf{Separación de Valor vs. Volumen:} Se detectó que el dataset vincula el gasto monetario (\texttt{Monto}) específicamente a las categorías de productos, mientras que vincula el volumen de transacciones (\texttt{NumeroDeCompras}) a los canales de venta. Por lo tanto, no es correcto calcular 'Ingresos por Canal', sino 'Tráfico por Canal'.
+    \item \textbf{Limitación de Costos:} Dado que el dataset no incluye los costos operativos de las campañas, se descartaron métricas financieras como ROI o Margen para evitar datos ficticios, centrando el análisis en Ingresos Brutos y Comportamiento.
+\end{itemize}
+
+A continuación, se presentan las preguntas clave de negocio (KBQ) definitivas y los KPIs implementados para resolverlas:
+
+\begin{table}[H]
+\centering
+\caption{Mapeo Definitivo de Preguntas de Negocio a KPIs e Insights}
+\label{tab:kpis_final}
+\begin{tabular}{|p{5cm}|p{5cm}|p{4cm}|}
+\hline
+\textbf{Pregunta de Negocio (KBQ)} & \textbf{KPI / Métrica Implementada} & \textbf{Justificación Técnica} \\
+\hline
+¿Cuánto dinero ingresa la compañía y qué productos lo generan? & \textbf{Ventas Totales} (Suma de Monto) y Gasto por Categoría. & Uso de \texttt{Fact\_Gasto} vinculada a \texttt{Dim\_CategoriaProducto}. \\
+\hline
+¿Qué canal de venta genera más tráfico de clientes? & \textbf{Volumen de Transacciones} y Tráfico por Canal. & Uso de \texttt{Fact\_Compras} vinculada a \texttt{Dim\_CanalCompra}. \\
+\hline
+¿Cuál es el valor promedio que aporta un cliente por interacción? & \textbf{Valor del Cliente} (Ticket Promedio Global). & División: $\frac{\text{Ventas Totales}}{\text{Volumen Transacciones}}$. \\
+\hline
+¿Existe estacionalidad en las ventas? & \textbf{Tendencia Jerárquica} (Año/Mes). & Gráfico de líneas usando la jerarquía de \texttt{Dim\_Fecha}. \\
+\hline
+¿Los clientes con mayores ingresos son los que más gastan realmente? & \textbf{Análisis de Dispersión} (Poder Adquisitivo vs. Gasto Real). & Scatter plot correlacionando \texttt{Income} y \texttt{Monto} (filtrando outliers). \\
+\hline
+¿Cuál es el Retorno de Inversión (ROI) de cada campaña? & \textbf{ROI} (Descartado en esta fase). & Inviabilidad técnica por falta de datos de costes reales en el dataset origen. \\
+\hline
+\end{tabular}
+\end{table}
+
+\section{Diseño del Modelo Dimensional (Data Warehouse)}
+Aquí se traducen los requisitos y el perfilado de datos en un esquema técnico. El objetivo es pasar de una tabla plana denormalizada a un esquema en estrella optimizado para consultas analíticas.
+
+\subsection{Justificación del Esquema en Estrella}
+El modelo de origen (tabla plana única) es ineficiente para BI. Las consultas analíticas requerirían escaneos de tabla completa. Un esquema en estrella separa las medidas (números cuantitativos) en Tablas de Hechos y los atributos (contexto descriptivo) en Tablas de Dimensiones. Esto reduce la redundancia, mejora la integridad de los datos y ofrece un rendimiento de consulta superior para herramientas como Power BI.
+
+\subsection{Diseño de Tablas de Dimensiones (El Contexto)}
+\begin{itemize}
+    \item \textbf{Dim\_Cliente (El 'Quién'):} Almacena atributos demográficos.
+    \begin{itemize}
+        \item \textit{PK:} ClienteSK. \textit{BK:} ClienteID\_Origen.
+        \item \textit{Atributos:} AnioNacimiento, Educacion, EstadoCivil, Ingreso, Pais, FlagQueja.
+    \end{itemize}
+    
+    \item \textbf{Dim\_Fecha (El 'Cuándo'):} Tabla de fechas estándar para análisis temporal.
+    \begin{itemize}
+        \item \textit{PK:} FechaSK.
+        \item \textit{Atributos:} FechaCompleta, Anio, Trimestre, Mes, NombreMes, DiaDeSemana.
+    \end{itemize}
+    
+    \item \textbf{Dim\_CategoriaProducto (El 'Qué' - Gasto):} Transforma columnas de gasto en filas.
+    \begin{itemize}
+        \item \textit{PK:} CategoriaProductoSK.
+        \item \textit{Valores:} 'Wines', 'Fruits', 'Meat', 'Fish', 'Sweets', 'Gold'.
+    \end{itemize}
+    
+    \item \textbf{Dim\_CanalCompra (El 'Dónde'):} Transforma columnas de compras en filas.
+    \begin{itemize}
+        \item \textit{PK:} CanalCompraSK.
+        \item \textit{Valores:} 'Web', 'Catalog', 'Store', 'Deals'.
+    \end{itemize}
+    
+    \item \textbf{Dim\_Campana (El 'Por Qué'):} Almacena detalles de campañas.
+    \begin{itemize}
+        \item \textit{PK:} CampanaSK.
+        \item \textit{Atributos:} NombreCampana, CostoCampana (inicializada en 0 debido a falta de datos para imputación).
+    \end{itemize}
+\end{itemize}
+
+\subsection{Diseño de Tablas de Hechos (Las Medidas)}
+Como se identificó en el perfilado, una sola fila de cliente en el CSV contiene tres tipos de eventos de negocio distintos. El diseño correcto es crear tres tablas de hechos separadas (Esquema de Constelación).
+
+\begin{itemize}
+    \item \textbf{Fact\_Gasto:} Gasto por Cliente por Categoría.
+    \begin{itemize}
+        \item \textit{FKs:} ClienteSK, FechaGastoSK, CategoriaProductoSK.
+        \item \textit{Medida:} Monto.
+    \end{itemize}
+    
+    \item \textbf{Fact\_Compras:} Compras por Cliente por Canal.
+    \begin{itemize}
+        \item \textit{FKs:} ClienteSK, FechaCompraSK, CanalCompraSK.
+        \item \textit{Medida:} NumeroDeCompras.
+    \end{itemize}
+    
+    \item \textbf{Fact\_RespuestasCampana:} Respuesta por Cliente por Campaña.
+    \begin{itemize}
+        \item \textit{FKs:} ClienteSK, FechaRespuestaSK, CampanaSK.
+        \item \textit{Medida:} Respuesta (1/0).
+    \end{itemize}
+\end{itemize}
+
+\subsection{Diagrama del Esquema Físico}
+El diseño resultante es un esquema de 'Constelación' (o 'Galaxy'), donde las tres tablas de hechos comparten dimensiones comunes.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.95\textwidth]{Diagram-marketing-campaign.png}
+    \caption{Diagrama Entidad-Relación del Modelo Estrella (MarketingDW)}
+    \label{fig:diagrama}
+\end{figure}
+
+\newpage
+\section{Implementación en SQL Server}
+
+\subsection{Configuración del Entorno}
+Se configuró SQL Server creando dos bases de datos: \texttt{origen} (para la carga inicial del CSV) y \texttt{MarketingDW} (el destino final).
+
+\begin{figure}[H]
+    \centering
+    \begin{subfigure}[b]{0.3\textwidth}
+        \includegraphics[width=\textwidth]{SQL Server/Conexion-servidor-SQL-Server.png}
+        \caption{Conexión}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.3\textwidth}
+        \includegraphics[width=\textwidth]{SQL Server/SQL-Server-01.png}
+        \caption{Nueva BD}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.3\textwidth}
+        \includegraphics[width=\textwidth]{SQL Server/SQL-Server-02.png}
+        \caption{BD Origen}
+    \end{subfigure}
+    \caption{Configuración inicial del servidor}
+\end{figure}
+
+\subsection{Staging de Datos}
+Importación del archivo plano a la base de datos de staging.
+
+\begin{figure}[H]
+    \centering
+    \begin{subfigure}[b]{0.24\textwidth}
+        \includegraphics[width=\textwidth]{SQL Server/SQL-Server-03.png}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.24\textwidth}
+        \includegraphics[width=\textwidth]{SQL Server/SQL-Server-04.png}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.24\textwidth}
+        \includegraphics[width=\textwidth]{SQL Server/SQL-Server-05.png}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.24\textwidth}
+        \includegraphics[width=\textwidth]{SQL Server/SQL-Server-06.png}
+    \end{subfigure}
+    
+    \vspace{0.2cm}
+    \begin{subfigure}[b]{0.24\textwidth}
+        \includegraphics[width=\textwidth]{SQL Server/SQL-Server-07.png}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.24\textwidth}
+        \includegraphics[width=\textwidth]{SQL Server/SQL-Server-08.png}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.24\textwidth}
+        \includegraphics[width=\textwidth]{SQL Server/SQL-Server-09.png}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.24\textwidth}
+        \includegraphics[width=\textwidth]{SQL Server/SQL-Server-10.png}
+    \end{subfigure}
+    \caption{Secuencia completa de importación y validación de datos}
+\end{figure}
+
+\subsection{Script DDL (Creación de Tablas)}
+El siguiente código SQL (\texttt{SQLQuery3.sql}) fue ejecutado para crear la estructura dimensional y poblar la dimensión fecha de manera programática.
+
+\begin{lstlisting}[language=SQL, caption={SQLQuery3.sql: Creación del Data Warehouse}, label={lst:sql_ddl}]
+CREATE TABLE dbo.Dim_Cliente (
+    ClienteSK INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+    ClienteID_Origen INT NOT NULL,
+    AnioNacimiento INT,
+    Educacion VARCHAR(100),
+    EstadoCivil VARCHAR(100),
+    Ingreso DECIMAL(18,2),
+    FlagQueja INT NOT NULL DEFAULT 0,
+    FechaAlta DATE
+);
+CREATE NONCLUSTERED INDEX IX_Dim_Cliente_BK ON dbo.Dim_Cliente(ClienteID_Origen);
+
+CREATE TABLE dbo.Dim_Fecha (
+    FechaSK INT NOT NULL PRIMARY KEY,
+    FechaCompleta DATE NOT NULL,
+    Anio INT NOT NULL,
+    Trimestre INT NOT NULL,
+    Mes INT NOT NULL,
+    NombreMes VARCHAR(50) NOT NULL,
+    DiaDeSemana VARCHAR(50) NOT NULL
+);
+GO
+
+DECLARE @StartDate DATE = '20100101';
+DECLARE @EndDate DATE = '20251231';
+
+SET LANGUAGE Spanish;
+
+WITH DateSequence AS (
+    SELECT @StartDate AS Fecha
+    UNION ALL
+    SELECT DATEADD(DAY, 1, Fecha)
+    FROM DateSequence
+    WHERE Fecha < @EndDate
+)
+INSERT INTO dbo.Dim_Fecha (
+    FechaSK,
+    FechaCompleta,
+    Anio,
+    Trimestre,
+    Mes,
+    NombreMes,
+    DiaDeSemana
+)
+SELECT
+    ROW_NUMBER() OVER(ORDER BY Fecha) AS FechaSK,
+    Fecha AS FechaCompleta,
+    YEAR(Fecha) AS Anio,
+    DATEPART(QUARTER, Fecha) AS Trimestre,
+    MONTH(Fecha) AS Mes,
+    DATENAME(MONTH, Fecha) AS NombreMes,
+    DATENAME(WEEKDAY, Fecha) AS DiaDeSemana
+FROM DateSequence
+OPTION (MAXRECURSION 0);
+GO
+
+CREATE TABLE dbo.Dim_CategoriaProducto (
+    CategoriaProductoSK INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+    NombreCategoria VARCHAR(100) NOT NULL
+);
+
+CREATE TABLE dbo.Dim_CanalCompra (
+    CanalCompraSK INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+    NombreCanal VARCHAR(100) NOT NULL
+);
+
+CREATE TABLE dbo.Dim_Campana (
+    CampanaSK INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+    NombreCampana VARCHAR(100) NOT NULL,
+    CostoCampana DECIMAL(18,2) NOT NULL DEFAULT 0
+);
+
+CREATE TABLE dbo.Fact_Gasto (
+    FactGastoSK INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+    ClienteSK INT NOT NULL,
+    FechaGastoSK INT NOT NULL,
+    CategoriaProductoSK INT NOT NULL,
+    Monto DECIMAL(18,2) NOT NULL,
+
+    CONSTRAINT FK_Fact_Gasto_Dim_Cliente FOREIGN KEY (ClienteSK) REFERENCES dbo.Dim_Cliente(ClienteSK),
+    CONSTRAINT FK_Fact_Gasto_Dim_Fecha FOREIGN KEY (FechaGastoSK) REFERENCES dbo.Dim_Fecha(FechaSK),
+    CONSTRAINT FK_Fact_Gasto_Dim_CategoriaProducto FOREIGN KEY (CategoriaProductoSK) REFERENCES dbo.Dim_CategoriaProducto(CategoriaProductoSK)
+);
+
+CREATE TABLE dbo.Fact_Compras (
+    FactComprasSK INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+    ClienteSK INT NOT NULL,
+    FechaCompraSK INT NOT NULL,
+    CanalCompraSK INT NOT NULL,
+    NumeroDeCompras INT NOT NULL,
+
+    CONSTRAINT FK_Fact_Compras_Dim_Cliente FOREIGN KEY (ClienteSK) REFERENCES dbo.Dim_Cliente(ClienteSK),
+    CONSTRAINT FK_Fact_Compras_Dim_Fecha FOREIGN KEY (FechaCompraSK) REFERENCES dbo.Dim_Fecha(FechaSK),
+    CONSTRAINT FK_Fact_Compras_Dim_CanalCompra FOREIGN KEY (CanalCompraSK) REFERENCES dbo.Dim_CanalCompra(CanalCompraSK)
+);
+
+CREATE TABLE dbo.Fact_RespuestasCampana (
+    FactRespuestasSK INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+    ClienteSK INT NOT NULL,
+    FechaRespuestaSK INT NOT NULL,
+    CampanaSK INT NOT NULL,
+    Respuesta INT NOT NULL,
+
+    CONSTRAINT FK_Fact_Respuestas_Dim_Cliente FOREIGN KEY (ClienteSK) REFERENCES dbo.Dim_Cliente(ClienteSK),
+    CONSTRAINT FK_Fact_Respuestas_Dim_Fecha FOREIGN KEY (FechaRespuestaSK) REFERENCES dbo.Dim_Fecha(FechaSK),
+    CONSTRAINT FK_Fact_Respuestas_Dim_Campana FOREIGN KEY (CampanaSK) REFERENCES dbo.Dim_Campana(CampanaSK)
+);
+\end{lstlisting}
+
+\begin{figure}[H]
+    \centering
+    \begin{subfigure}[b]{0.45\textwidth}
+        \includegraphics[width=\textwidth]{SQL Server/SQL-Server-11.png}
+        \caption{Configuración BD Destino}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.45\textwidth}
+        \includegraphics[width=\textwidth]{SQL Server/SQL-Server-13.png}
+        \caption{Ejecución del Script}
+    \end{subfigure}
+    
+    \begin{subfigure}[b]{0.9\textwidth}
+        \includegraphics[width=\textwidth]{SQL Server/SQL-Server-14.png}
+        \caption{Tablas creadas en MarketingDW}
+    \end{subfigure}
+    \caption{Despliegue del esquema en SQL Server}
+\end{figure}
+
+\newpage
+\section{Proceso ETL con SSIS (Visual Studio)}
+
+Se implementó un paquete ETL en Visual Studio para poblar el Data Warehouse.
+
+\subsection{Configuración del Proyecto}
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.3\textwidth]{Visual Studio/VisualStudio-01.png}
+    \includegraphics[width=0.3\textwidth]{Visual Studio/VisualStudio-02.png}
+    \includegraphics[width=0.3\textwidth]{Visual Studio/VisualStudio-03.png}
+    
+    \includegraphics[width=0.3\textwidth]{Visual Studio/VisualStudio-04.png}
+    \includegraphics[width=0.3\textwidth]{Visual Studio/VisualStudio-05.png}
+    \includegraphics[width=0.3\textwidth]{Visual Studio/VisualStudio-06.png}
+    
+    \includegraphics[width=0.3\textwidth]{Visual Studio/VisualStudio-07.png}
+    \includegraphics[width=0.3\textwidth]{Visual Studio/VisualStudio-08.png}
+    \includegraphics[width=0.3\textwidth]{Visual Studio/VisualStudio-09.png}
+    \caption{Inicio del proyecto y configuración de conexiones OLE DB}
+\end{figure}
+
+\subsection{Diseño del Flujo de Datos (Data Flow)}
+Se crearon tareas para mover datos desde \texttt{origen} a \texttt{MarketingDW}, aplicando transformaciones para normalizar las tablas de hechos.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.4\textwidth]{Visual Studio/VisualStudio-10.png}
+    \includegraphics[width=0.4\textwidth]{Visual Studio/VisualStudio-55.png}
+    \caption{Componentes del Data Flow y ejecución exitosa del paquete}
+\end{figure}
+
+\subsection{Transformaciones en Origen (Query SQL)}
+Se utilizaron consultas SQL con \texttt{CROSS APPLY} para transformar columnas (como los diferentes productos) en filas (Unpivot).
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.3\textwidth]{Visual Studio/VisualStudio-15.png}
+    \includegraphics[width=0.3\textwidth]{Visual Studio/VisualStudio-23.png}
+    \includegraphics[width=0.3\textwidth]{Visual Studio/VisualStudio-28.png}
+    
+    \includegraphics[width=0.3\textwidth]{Visual Studio/VisualStudio-33.png}
+    \includegraphics[width=0.3\textwidth]{Visual Studio/VisualStudio-38.png}
+    \includegraphics[width=0.3\textwidth]{Visual Studio/VisualStudio-43.png}
+    
+    \includegraphics[width=0.3\textwidth]{Visual Studio/VisualStudio-48.png}
+    \caption{Consultas SQL de extracción y transformación en SSIS}
+\end{figure}
+
+\subsection{Mapeo y Vista Previa de Datos}
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.23\textwidth]{Visual Studio/VisualStudio-16.png}
+    \includegraphics[width=0.23\textwidth]{Visual Studio/VisualStudio-19.png}
+    \includegraphics[width=0.23\textwidth]{Visual Studio/VisualStudio-24.png}
+    \includegraphics[width=0.23\textwidth]{Visual Studio/VisualStudio-26.png}
+    
+    \includegraphics[width=0.23\textwidth]{Visual Studio/VisualStudio-27.png}
+    \includegraphics[width=0.23\textwidth]{Visual Studio/VisualStudio-30.png}
+    \includegraphics[width=0.23\textwidth]{Visual Studio/VisualStudio-32.png}
+    \includegraphics[width=0.23\textwidth]{Visual Studio/VisualStudio-35.png}
+    
+    \includegraphics[width=0.23\textwidth]{Visual Studio/VisualStudio-37.png}
+    \includegraphics[width=0.23\textwidth]{Visual Studio/VisualStudio-40.png}
+    \includegraphics[width=0.23\textwidth]{Visual Studio/VisualStudio-42.png}
+    \includegraphics[width=0.23\textwidth]{Visual Studio/VisualStudio-45.png}
+    
+    \includegraphics[width=0.23\textwidth]{Visual Studio/VisualStudio-47.png}
+    \includegraphics[width=0.23\textwidth]{Visual Studio/VisualStudio-50.png}
+    \includegraphics[width=0.23\textwidth]{Visual Studio/VisualStudio-52.png}
+    \includegraphics[width=0.23\textwidth]{Visual Studio/VisualStudio-51.png}
+    \caption{Vistas previas de datos y asignaciones de destino}
+\end{figure}
+
+\subsection{Detalles Adicionales de Configuración}
+Se incluyen capturas adicionales del proceso de configuración de componentes, mapeo de columnas y ejecución del paquete.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.23\textwidth]{Visual Studio/VisualStudio-11.png}
+    \includegraphics[width=0.23\textwidth]{Visual Studio/VisualStudio-12.png}
+    \includegraphics[width=0.23\textwidth]{Visual Studio/VisualStudio-13.png}
+    \includegraphics[width=0.23\textwidth]{Visual Studio/VisualStudio-14.png}
+    
+    \includegraphics[width=0.23\textwidth]{Visual Studio/VisualStudio-17.png}
+    \includegraphics[width=0.23\textwidth]{Visual Studio/VisualStudio-18.png}
+    \includegraphics[width=0.23\textwidth]{Visual Studio/VisualStudio-20.png}
+    \includegraphics[width=0.23\textwidth]{Visual Studio/VisualStudio-21.png}
+    
+    \includegraphics[width=0.23\textwidth]{Visual Studio/VisualStudio-22.png}
+    \includegraphics[width=0.23\textwidth]{Visual Studio/VisualStudio-25.png}
+    \includegraphics[width=0.23\textwidth]{Visual Studio/VisualStudio-29.png}
+    \includegraphics[width=0.23\textwidth]{Visual Studio/VisualStudio-31.png}
+    
+    \includegraphics[width=0.23\textwidth]{Visual Studio/VisualStudio-34.png}
+    \includegraphics[width=0.23\textwidth]{Visual Studio/VisualStudio-36.png}
+    \includegraphics[width=0.23\textwidth]{Visual Studio/VisualStudio-39.png}
+    \includegraphics[width=0.23\textwidth]{Visual Studio/VisualStudio-41.png}
+    
+    \includegraphics[width=0.23\textwidth]{Visual Studio/VisualStudio-44.png}
+    \includegraphics[width=0.23\textwidth]{Visual Studio/VisualStudio-46.png}
+    \includegraphics[width=0.23\textwidth]{Visual Studio/VisualStudio-49.png}
+    \includegraphics[width=0.23\textwidth]{Visual Studio/VisualStudio-53.png}
+    
+    \includegraphics[width=0.23\textwidth]{Visual Studio/VisualStudio-54.png}
+    \caption{Configuraciones adicionales y pasos intermedios del proceso ETL}
+\end{figure}
+
+\newpage
+\section{Dashboard en Power BI}
+
+\subsection{Desarrollo y Limpieza}
+Se realizaron pasos de limpieza adicionales en Power Query y se creó el modelo de datos relacional.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.23\textwidth]{Power BI/PowerBI-01.png}
+    \includegraphics[width=0.23\textwidth]{Power BI/PowerBI-02.png}
+    \includegraphics[width=0.23\textwidth]{Power BI/PowerBI-03.png}
+    \includegraphics[width=0.23\textwidth]{Power BI/PowerBI-04.png}
+    
+    \includegraphics[width=0.23\textwidth]{Power BI/PowerBI-05.png}
+    \includegraphics[width=0.23\textwidth]{Power BI/PowerBI-06.png}
+    \includegraphics[width=0.23\textwidth]{Power BI/PowerBI-07.png}
+    \includegraphics[width=0.23\textwidth]{Power BI/PowerBI-08.png}
+    
+    \includegraphics[width=0.23\textwidth]{Power BI/PowerBI-09.png}
+    \includegraphics[width=0.23\textwidth]{Power BI/PowerBI-10.png}
+    \includegraphics[width=0.23\textwidth]{Power BI/PowerBI-11.png}
+    \includegraphics[width=0.23\textwidth]{Power BI/PowerBI-12.png}
+    
+    \includegraphics[width=0.23\textwidth]{Power BI/PowerBI-13.png}
+    \includegraphics[width=0.23\textwidth]{Power BI/PowerBI-14.png}
+    \includegraphics[width=0.23\textwidth]{Power BI/PowerBI-15.png}
+    \includegraphics[width=0.23\textwidth]{Power BI/PowerBI-16.png}
+    \caption{Pasos de conexión, transformación y limpieza en Power BI}
+\end{figure}
+
+\subsection{Dashboard Final}
+El resultado es un cuadro de mando ejecutivo que permite el análisis cruzado de ventas por canal, categoría y perfil del cliente.
+
+\begin{figure}[H]
+    \centering
+    \begin{subfigure}[b]{0.45\textwidth}
+        \includegraphics[width=\textwidth]{Power BI/PowerBI-outlier.png}
+        \caption{Detección de Outliers}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.45\textwidth}
+        \includegraphics[width=\textwidth]{Power BI/PowerBI-nooutlier.png}
+        \caption{Vista filtrada sin outliers}
+    \end{subfigure}
+    \caption{Análisis de datos y manejo de outliers}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.7\textwidth]{Power BI/PowerBI-dashboard.png}
+    \caption{Vista de diseño del Dashboard}
+\end{figure}
+
+\subsection{Validación de Requisitos de Negocio}
+
+Para garantizar la alineación del producto final con los objetivos estratégicos, se ha realizado una trazabilidad entre las Preguntas Clave de Negocio (KBQ) definidas en la fase de análisis y los componentes visuales implementados en el Dashboard.
+
+\begin{longtable}{|p{5.5cm}|p{2cm}|p{6cm}|}
+\caption{Matriz de Cobertura de Requisitos} \label{tab:validacion} \\
+\hline
+\textbf{Pregunta de Negocio (KBQ)} & \textbf{Estado} & \textbf{Resolución en Dashboard} \\
+\hline
+\endfirsthead
+\hline
+\textbf{Pregunta de Negocio (KBQ)} & \textbf{Estado} & \textbf{Resolución en Dashboard} \\
+\hline
+\endhead
+¿Cuánto dinero ingresa la compañía y qué productos lo generan? & \textcolor{blue}{\textbf{Resuelto}} & KPI de \textit{Ventas Totales} (\$1.36M) y Gráfico de barras \textit{Gasto por Categoría}. \\
+\hline
+¿Qué canal de venta genera más tráfico de clientes? & \textcolor{blue}{\textbf{Resuelto}} & KPI de \textit{Volumen de Transacciones} (33K) y Gráfico de columnas \textit{Tráfico por Canal}. \\
+\hline
+¿Cuál es el valor promedio que aporta un cliente? & \textcolor{blue}{\textbf{Resuelto}} & KPI de \textit{Valor Gasto Medio del Cliente} (\$40.76). \\
+\hline
+¿Existe estacionalidad en las ventas? & \textcolor{blue}{\textbf{Resuelto}} & Gráfico de líneas \textit{Tendencia Jerárquica}, permitiendo drill-down a nivel mensual para detectar picos. \\
+\hline
+¿Los clientes con mayores ingresos son los que más gastan? & \textcolor{blue}{\textbf{Resuelto}} & Gráfico de dispersión \textit{Poder Adquisitivo vs Gasto Real} con slider para filtrar outliers. \\
+\hline
+¿Cuál es el Retorno de Inversión (ROI) de cada campaña? & \textcolor{red}{\textbf{Pendiente}} & No implementado debido a la falta de datos de costes en el origen. \\
+\hline
+\end{longtable}
+
+\subsection{Hoja de Ruta y Futuras Mejoras}
+Basado en la auditoría anterior, se identifican áreas clave para la evolución del sistema en una segunda iteración:
+
+\begin{enumerate}
+    \item \textbf{Incorporación de Datos de Costos (Prioridad Alta):}
+    La pregunta de negocio sobre el ROI no ha podido ser resuelta en esta fase. Se requiere la ingesta de un nuevo fichero origen que contenga el presupuesto gastado por campaña (\texttt{Dim\_Campana.CostoCampana}). Esto habilitará automáticamente el cálculo de métricas de rentabilidad sin modificar la estructura del Data Warehouse.
+    
+    \item \textbf{Análisis Geográfico:}
+    Aprovechar la columna \texttt{Country} disponible en el dataset (actualmente cargada pero no explotada) para añadir un mapa interactivo que permita filtrar el rendimiento de marketing por región geográfica.
+    
+    \item \textbf{Modelo Predictivo:}
+    Integrar un script de Python o R en Power BI para clusterizar a los clientes basándose en su comportamiento de compra (RFM Analysis), yendo más allá del análisis descriptivo actual hacia uno prescriptivo.
+\end{enumerate}
+
+\end{document}
